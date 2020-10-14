@@ -1,1 +1,297 @@
 # AWS-with-Terraform
+
+Terraform:
+
+Terraform can manage existing and popular service providers as well as custom in-house solutions. Terraform generates an execution plan describing what it will do to reach the desired state, and then executes it to build the described infrastructure. As the configuration changes, Terraform is able to determine what changed and create incremental execution plans which can be applied.
+pre-requisites:
+
+    AWS CLI with Amazon AWS account
+    Terraform CLI
+
+Steps for Problem solving Statement:
+
+1. Create the key and security group which allow the port 80.
+
+2. Launch EC2 instance.
+
+3. In this Ec2 instance use the key and security group which we have created in step 1.
+
+4. Launch one Volume (EBS) and mount that volume into /var/www/html
+
+5. Developer have uploded the code into github repo also the repo has some images.
+
+6. Copy the github repo code into /var/www/html
+
+7. Create S3 bucket, and copy/deploy the images from github repo into the s3 bucket and change the permission to public readable.
+
+8 Create a Cloudfront using s3 bucket(which contains images) and use the Cloudfront URL to update in code in /var/www/html
+
+
+*Optional*
+
+1) Those who are familiar with jenkins or are in devops AL have to integrate jenkins in this task wherever you feel can be integrated
+
+2) create snapshot of ebs
+
+Downloaded Terraform CLI from the above-given link, So now let’s start configuring it using some general problems. It’s easy to set up after downloading the CLI, Move towards the search in your windows and type ‘Edit the Environment Variables’ and perform below configuration:
+
+Step 1: Setup the provider for terraform i.e. AWS, Login to our console of AWS using profile configured.
+
+provider "aws" {
+	   profile="deepak"
+	   region="ap-south-1"
+	}
+
+Terraform main support comes from its plugins and cloud providers, We have to do is enter the region and profile which will help to remote login to our AWS account.
+
+Step 2: Generating a key, key-value pair, and saving it as a .pem file in the system.
+
+//creating key
+	resource "tls_private_key" "tls_key" {
+	algorithm = "RSA"
+	}
+	
+
+	//generating key_value_pair
+	resource "aws_key_pair" "generated_key" {
+	key_name ="web-envi-key"
+	public_key ="${tls_private_key.tls_key.public_key_openssh}"
+	depends_on =[tls_private_key.tls_key]
+	}
+	
+
+	//saving private key pem file
+	resource "local_file" "key-file" {
+	content ="${tls_private_key.tls_key.private_key_pem}"
+	filename ="web-envi-key.pem"
+	depends_on =[tls_private_key.tls_key]
+	}
+	
+
+	
+
+Step3: Creation of Security group for AWS EC2 Instance
+
+//creating security group
+	
+
+	resource  "aws_security_group"  "web-SG" {
+	name        = "Web-envi-SG"
+	description = "Web enviornment security group"
+	
+
+	 
+	ingress {
+	
+
+	description = "SSH rule"
+	from_port   = 22
+	to_port     = 22
+	protocol    = "tcp"
+	cidr_blocks = ["0.0.0.0/0"]
+	     }
+	
+
+	     ingress {
+	description = "HTTP rule"
+	from_port   = 80
+	to_port     = 80
+	protocol    = "tcp"
+	cidr_blocks = ["0.0.0.0/0"]
+	     }
+	}
+
+we define the resource “aws_security_group”.
+
+    ingress is used for the inbound rule setup. And we want to allow the ssh, so we have to set up the TCP protocol in it with port no 22.
+    tags are to define our security group some key which can be used as further to differentiate from others.
+    Let’s define “aws_security_group_rule” with some HTTP and SSH protocols using port 80 and 22.
+
+Step4: Creating S3 bucket for Amazon AWS
+
+//creating s3 bucket
+	resource "aws_s3_bucket" "kaushik-bucket" {
+	  bucket = "deepak1234-bucket"
+	  acl    = "public-read"
+	
+
+	  tags = {
+	    Name        = "kaushik-bucket"
+	  }
+	}
+	
+
+	
+
+	//putting object in s3 bucket
+	resource "aws_s3_bucket_object"  "web-object1" {
+	bucket ="${aws_s3_bucket.kaushik-bucket.bucket}"
+	key    ="kohli.jfif"
+	source ="C:/Users/deepak/Desktop/kohli.jfif"
+	acl    ="public-read"
+	
+    }
+
+    We have to upload the images of our website in the S3 bucket. But Terraform doesn’t support uploading a whole directory to the bucket so we have to use the local execution after the bucket created it will help us to retrieve our data for CloudFront distribution.
+    source — It is used for the location form which we have to upload image to the bucket.
+
+Step5: Cloudfront Distribution Setup
+
+//creating cloudfront with s3 bucket origin
+	resource "aws_cloudfront_distribution"  "s3-web-distribution" {
+	origin {
+	  domain_name ="${aws_s3_bucket.kaushik-bucket.bucket_regional_domain_name}"
+	  origin_id ="${aws_s3_bucket.kaushik-bucket.id}"
+	}
+	        enabled = true
+	is_ipv6_enabled = true
+	comment = "s3 web distribution"
+	
+
+	default_cache_behavior {
+	   allowed_methods  = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+	cached_methods = ["GET", "HEAD"]
+	target_origin_id = "${aws_s3_bucket.kaushik-bucket.id}"
+	
+
+	forwarded_values {
+	query_string =false
+	  cookies {
+	forward ="none"
+	  }
+	}
+	viewer_protocol_policy = "allow-all"
+	min_ttl = 0
+	default_ttl =3600
+	max_ttl =86400
+	}
+	restrictions {
+	 geo_restriction {
+	restriction_type = "whitelist"
+	locations = ["IN"]
+	}
+	
+
+	}
+	tags = {
+	  Name = "web-CF-disrtibution"
+	  Environment  ="production"
+	}
+	
+
+	viewer_certificate {
+	cloudfront_default_certificate = true
+	}
+	depends_on =[aws_s3_bucket.kaushik-bucket]
+	}
+
+CloudFront speeds up the distribution of your content by routing each user request through the AWS backbone network to the edge location that can best serve your content.
+
+Step6: Create and Launch an Instance
+
+// Launching ec2 instance
+	resource "aws_instance" "web" {
+	  ami             = "${var.ami_id}"
+	  instance_type   = "${var.ami_type}"
+	  key_name        = "${aws_key_pair.generated_key.key_name}"
+	  security_groups = ["${aws_security_group.web-SG.name}","default"]
+	
+
+	  //Labelling the Instance
+	  tags = {
+	    Name = "Web-Env"
+	    env  = "Production"
+	  } 
+	
+
+	  depends_on = [
+	    aws_security_group.web-SG,
+	    aws_key_pair.generated_key
+	  ]
+	}
+	
+  
+
+Variables ami_id and ami_type created above are going to use here to create and launch an instance named ‘web’. Here, We will use the key, security groups, and ami to build a system that can be easily accessed using ssh connection which will help to perform operations to create infrastructure. 
+
+Step7: Final Step to create a website using the null resource, local_exec, remote_exec, and Volume to store data
+
+resource "null_resource" "remote1" {
+	  
+	  depends_on = [ aws_instance.web, ]
+	  //Executing Commands to initiate WebServer in Instance Over SSH 
+	  provisioner "remote-exec" {
+	    connection {
+	      agent       = "false"
+	      type        = "ssh"
+	      user        = "ec2-user"
+	      private_key = "${tls_private_key.tls_key.private_key_pem}"
+	      host        = "${aws_instance.web.public_ip}"
+	    }
+	    
+	    inline = [
+	      "sudo yum install httpd git -y",
+	      "sudo service httpd start ",
+	      "sudo service httpd enable"
+	    ]
+	
+
+	}
+	
+
+	}
+	//Creating EBS Volume
+	resource "aws_ebs_volume" "web-vol" {
+	  availability_zone = "${aws_instance.web.availability_zone}"
+	  size              = 1
+	  
+	  tags = {
+	    Name = "ebs-vol"
+	  }
+	}
+	
+
+	
+
+	//Attaching EBS Volume to a Instance
+	resource "aws_volume_attachment" "ebs_att" {
+	  device_name  = "/dev/sdh"
+	  volume_id    = "${aws_ebs_volume.web-vol.id}"
+	  instance_id  = "${aws_instance.web.id}"
+	  force_detach = true 
+	
+
+	
+
+	  provisioner "remote-exec" {
+	    connection {
+	      agent       = "false"
+	      type        = "ssh"
+	      user        = "ec2-user"
+	      private_key = "${tls_private_key.tls_key.private_key_pem}"
+	      host        = "${aws_instance.web.public_ip}"
+	    }
+	    
+	    inline = [
+	      "sudo mkfs.ext4 /dev/sdh",
+	      "sudo mount /dev/sdh /var/www/html/",
+	      "sudo rm -rf /var/www/html/*",
+	      "sudo git clone https://github.com/DEEPAKKAUSHIK11/Hybrid_multi_cloud.git /var/www/html/",
+	    ]
+	  }
+	
+
+	
+
+	  depends_on = [
+	    aws_instance.web,
+	    aws_ebs_volume.web-vol
+	]
+	}
+  }
+
+    Here, I’m using null resource for executing remote execution for installation of software, packages, and other necessary commands to run with root power inside the instance. Hence git and httpd will be automatically installed and made enabled for future purposes.
+    Now, After giving remote access time for creating a volume that can store data for the entire infrastructure we built. This volume needs to be attached to an instance for storage and that will be done using ‘aws_volume_attachment’ and that can be also detached when terraform infrastructure will be destroyed. Hence, Refer code for the same.
+    After the creation of instance and volume attachment, We can now perform remote operations to store data from our directory to the webserver config folder in environment i.e. var/www/html. Hence, Volume can also be mounted to store data from instance into the volume storage(dev/xvdh).
+
+Thank you
